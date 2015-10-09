@@ -90,6 +90,7 @@ class Importer(BaseImporter):
 
         self._parse_reaction_names(model)
         self._parse_reaction_equations(model)
+        self._parse_reaction_subsystems(model)
         self._parse_flux_bounds(model)
 
         met_model = MetabolicModel(
