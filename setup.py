@@ -39,7 +39,8 @@ setup(
     },
 
     install_requires=[
-        'psamm-import>=0.4',
+        'psamm>=0.16',
+        'psamm-import>=0.7',
         'numpy',
         'scipy',
         'six'
