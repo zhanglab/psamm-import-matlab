@@ -15,6 +15,7 @@
 #
 # Copyright 2015  Jon Lund Steffensen <jon_steffensen@uri.edu>
 
+import re
 import os
 import logging
 import scipy.io
@@ -91,6 +92,7 @@ class Importer(BaseImporter):
         self._parse_reaction_names(model)
         self._parse_reaction_equations(model)
         self._parse_reaction_subsystems(model)
+        self._parse_reaction_gene_rules(model)
         self._parse_flux_bounds(model)
 
         met_model = MetabolicModel(
@@ -202,6 +204,39 @@ class Importer(BaseImporter):
             subsystem = model.subSystems[i, 0]
             if len(subsystem) > 0:
                 reaction['subsystem'] = subsystem[0]
+
+    def _parse_reaction_gene_rules(self, model):
+        if not hasattr(model, 'genes'):
+            logger.warning('No genes defined in model')
+            return
+
+        if not hasattr(model, 'rules'):
+            logger.warning('No gene association rules in model')
+            return
+
+        gene_count = model.genes.shape[0]
+
+        var_p = re.compile(r'x\((\d+)\)')
+        def gene_repl(match):
+            gene_id = int(match.group(1))
+            if not 1 <= gene_id <= gene_count:
+                raise ParseError('Invalid gene index {}'.format(gene_id))
+
+            gene = model.genes[gene_id - 1, 0]
+            if len(gene) == 0:
+                raise ParseError('Missing gene information for {}'.format(
+                    gene_id))
+
+            return gene[0]
+
+        for i, reaction in enumerate(self._reactions):
+            rules = model.rules[i, 0]
+            if len(rules) > 0:
+                assoc = (var_p.sub(gene_repl, rules[0]).
+                         replace('&', 'and').
+                         replace('|', 'or'))
+                assoc = self._try_parse_gene_association(reaction['id'], assoc)
+                reaction['genes'] = assoc
 
     def _parse_flux_bounds(self, model):
         if not hasattr(model, 'lb') or not hasattr(model, 'ub'):
