@@ -20,7 +20,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='psamm-import-matlab',
-    version='0.1',
+    version='0.2',
     description='PSAMM importer for Matlab (.mat) COBRA models',
     maintainer='Jon Lund Steffensen',
     maintainer_email='jon_steffensen@uri.edu',
