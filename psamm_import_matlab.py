@@ -20,7 +20,7 @@ import os
 import logging
 import scipy.io
 
-from six import iteritems
+from six import iteritems, text_type
 
 from psamm.reaction import Reaction, Compound
 from psamm_import.model import (
@@ -114,14 +114,14 @@ class Importer(BaseImporter):
                     ' in the model: {}'.format(', '.join(biomass_reactions)))
             else:
                 reaction = next(iter(biomass_reactions))
-                met_model.biomass_reaction = reaction
+                met_model.biomass_reaction = text_type(reaction)
                 logger.info('Detected biomass reaction: {}'.format(reaction))
 
         return met_model
 
     def _parse_compounds(self, model):
         for i, id_array in enumerate(model.mets):
-            compound_id = id_array[0][0]
+            compound_id = text_type(id_array[0][0])
 
             # Work around IDs that end with "[X]". These are currently
             # misinterpreted as compartments.
@@ -138,7 +138,7 @@ class Importer(BaseImporter):
         for i, compound in enumerate(self._compounds):
             name = model.metNames[i, 0]
             if len(name) > 0:
-                compound['name'] = name[0]
+                compound['name'] = text_type(name[0])
 
     def _parse_compound_formulas(self, model):
         if not hasattr(model, 'metFormulas'):
@@ -148,7 +148,7 @@ class Importer(BaseImporter):
         for i, compound in enumerate(self._compounds):
             formula = model.metFormulas[i, 0]
             if len(formula) > 0:
-                compound['formula'] = formula[0]
+                compound['formula'] = text_type(formula[0])
 
     def _parse_compound_charge(self, model):
         if not hasattr(model, 'metCharge'):
@@ -161,7 +161,7 @@ class Importer(BaseImporter):
 
     def _parse_reactions(self, model):
         for i, id_array in enumerate(model.rxns):
-            reaction_id = id_array[0][0]
+            reaction_id = text_type(id_array[0][0])
             yield {'id': reaction_id}
 
     def _parse_reaction_names(self, model):
@@ -172,7 +172,7 @@ class Importer(BaseImporter):
         for i, reaction in enumerate(self._reactions):
             name = model.rxnNames[i, 0]
             if len(name) > 0:
-                reaction['name'] = name[0]
+                reaction['name'] = text_type(name[0])
 
     def _parse_reaction_equations(self, model):
         for i, reaction in enumerate(self._reactions):
@@ -203,7 +203,7 @@ class Importer(BaseImporter):
         for i, reaction in enumerate(self._reactions):
             subsystem = model.subSystems[i, 0]
             if len(subsystem) > 0:
-                reaction['subsystem'] = subsystem[0]
+                reaction['subsystem'] = text_type(subsystem[0])
 
     def _parse_reaction_gene_rules(self, model):
         if not hasattr(model, 'genes'):
