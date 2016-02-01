@@ -149,7 +149,8 @@ class Importer(BaseImporter):
         for i, compound in enumerate(self._compounds):
             formula = model.metFormulas[i, 0]
             if len(formula) > 0:
-                compound['formula'] = text_type(formula[0])
+                compound['formula'] = self._try_parse_formula(
+                    compound['id'], formula[0])
 
     def _parse_compound_charge(self, model):
         if not hasattr(model, 'metCharge'):
