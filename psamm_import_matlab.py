@@ -23,7 +23,7 @@ import scipy.io
 
 from six import text_type
 
-from psamm.reaction import Reaction, Compound
+from psamm.reaction import Reaction, Compound, Direction
 from psamm_import.model import (
     Importer as BaseImporter, ModelLoadError, ParseError,
     CompoundEntry, ReactionEntry, MetabolicModel)
@@ -179,21 +179,19 @@ class Importer(BaseImporter):
     def _parse_reaction_equations(self, model):
         for i, reaction in enumerate(self._reactions):
             # Parse reaction equation
-            compounds = []
             rows, _ = model.S[:, i].nonzero()
-            for row in rows:
-                compound_id = self._compounds[row]['id']
-                value = float(model.S[row, i])
-                if value % 1 == 0:
-                    value = int(value)
-                compounds.append((Compound(compound_id), value))
+
+            def iter_compounds():
+                for row in rows:
+                    compound_id = self._compounds[row]['id']
+                    value = float(model.S[row, i])
+                    if value % 1 == 0:
+                        value = int(value)
+                    yield Compound(compound_id), value
 
             direction = (
-                Reaction.Bidir if bool(model.rev[i][0]) else Reaction.Right)
-            equation = Reaction(
-                direction,
-                ((cpd, -value) for cpd, value in compounds if value < 0),
-                ((cpd, value) for cpd, value in compounds if value > 0))
+                Direction.Both if bool(model.rev[i][0]) else Direction.Forward)
+            equation = Reaction(direction, iter_compounds())
 
             reaction['equation'] = equation
 
