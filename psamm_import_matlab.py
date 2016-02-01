@@ -13,14 +13,15 @@
 # You should have received a copy of the GNU General Public License
 # along with PSAMM.  If not, see <http://www.gnu.org/licenses/>.
 #
-# Copyright 2015  Jon Lund Steffensen <jon_steffensen@uri.edu>
+# Copyright 2015-2016  Jon Lund Steffensen <jon_steffensen@uri.edu>
 
 import re
 import os
+import glob
 import logging
 import scipy.io
 
-from six import iteritems, text_type
+from six import text_type
 
 from psamm.reaction import Reaction, Compound
 from psamm_import.model import (
@@ -217,6 +218,7 @@ class Importer(BaseImporter):
         gene_count = model.genes.shape[0]
 
         var_p = re.compile(r'x\((\d+)\)')
+
         def gene_repl(match):
             gene_id = int(match.group(1))
             if not 1 <= gene_id <= gene_count:
