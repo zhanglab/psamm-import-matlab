@@ -13,7 +13,7 @@
 # You should have received a copy of the GNU General Public License
 # along with PSAMM.  If not, see <http://www.gnu.org/licenses/>.
 #
-# Copyright 2015-2016  Jon Lund Steffensen <jon_steffensen@uri.edu>
+# Copyright 2015-2017  Jon Lund Steffensen <jon_steffensen@uri.edu>
 
 import re
 import os
@@ -21,12 +21,13 @@ import glob
 import logging
 import scipy.io
 
-from six import text_type
+from six import text_type, itervalues
 
+from psamm.datasource.entry import (DictCompoundEntry as CompoundEntry,
+                                    DictReactionEntry as ReactionEntry)
 from psamm.reaction import Reaction, Compound, Direction
 from psamm_import.model import (
-    Importer as BaseImporter, ModelLoadError, ParseError,
-    CompoundEntry, ReactionEntry, MetabolicModel)
+    Importer as BaseImporter, ModelLoadError, ParseError, MetabolicModel)
 
 logger = logging.getLogger(__name__)
 
@@ -70,21 +71,38 @@ class Importer(BaseImporter):
                 model_key = key
 
         logger.info('Reading model stored in "{}"'.format(model_key))
-        model = mat[model_key][0, 0]
+        self._model = mat[model_key][0, 0]
 
-        if not hasattr(model, 'S'):
+        if not hasattr(self._model, 'S'):
             raise ParseError('Model does not have field "S"!')
 
-        compound_count, reaction_count = model.S.shape
+        compound_count, reaction_count = self._model.S.shape
 
-        if not hasattr(model, 'rxns') or len(model.rxns) != reaction_count:
+        if (not hasattr(self._model, 'rxns') or
+                len(self._model.rxns) != reaction_count):
             raise ParseError('Mismatch between sizes of "rxns" and "S"!')
 
-        if not hasattr(model, 'mets') or len(model.mets) != compound_count:
+        if (not hasattr(self._model, 'mets') or
+                len(self._model.mets) != compound_count):
             raise ParseError('Mismatch between sizes of "mets" and "S"!')
 
-        self._compounds = list(self._parse_compounds(model))
-        self._reactions = list(self._parse_reactions(model))
+        # Create lists so that we can later iterate over the entries in the
+        # same order. This is needed because the data associated with each
+        # compound/reaction is linked by being at the same index.
+        compound_list = list(self._parse_compounds())
+        reaction_list = list(self._parse_reactions())
+        model = MetabolicModel(compound_list, reaction_list)
+        model.name = model_key
+
+        # Just keep the IDs in these lists. This makes it easier to swap out
+        # entries for updated ones later.
+        self._compound_list = [c.id for c in compound_list]
+        self._reaction_list = [r.id for r in reaction_list]
+
+        # Translate compound IDs and update compound list.
+        compound_id_map = self._convert_compounds(model)
+        self._compound_list = [
+            compound_id_map.get(c.id, c.id) for c in compound_list]
 
         self._parse_compound_names(model)
         self._parse_compound_formulas(model)
@@ -96,16 +114,12 @@ class Importer(BaseImporter):
         self._parse_reaction_gene_rules(model)
         self._parse_flux_bounds(model)
 
-        met_model = MetabolicModel(
-            model_key, (CompoundEntry(**props) for props in self._compounds),
-            (ReactionEntry(**props) for props in self._reactions))
-
         # Detect biomass reaction
-        if hasattr(model, 'c'):
+        if hasattr(self._model, 'c'):
             biomass_reactions = set()
-            for i, reaction in enumerate(self._reactions):
-                if model.c[i, 0] != 0:
-                    biomass_reactions.add(reaction['id'])
+            for i, reaction_id in enumerate(self._reaction_list):
+                if self._model.c[i, 0] != 0:
+                    biomass_reactions.add(reaction_id)
 
             if len(biomass_reactions) == 0:
                 logger.warning('No objective reaction found in the model')
@@ -115,106 +129,136 @@ class Importer(BaseImporter):
                     ' in the model: {}'.format(', '.join(biomass_reactions)))
             else:
                 reaction = next(iter(biomass_reactions))
-                met_model.biomass_reaction = text_type(reaction)
+                model.biomass_reaction = text_type(reaction)
                 logger.info('Detected biomass reaction: {}'.format(reaction))
 
-        return met_model
+        return model
 
-    def _parse_compounds(self, model):
-        for i, id_array in enumerate(model.mets):
+    def _parse_compounds(self):
+        """Yield entries for all compounds in model."""
+        for i, id_array in enumerate(self._model.mets):
             compound_id = text_type(id_array[0][0])
+            yield CompoundEntry({'id': compound_id})
 
-            # Work around IDs that end with "[X]". These are currently
-            # misinterpreted as compartments.
-            if compound_id.endswith(']'):
-                compound_id += '_'
+    def _parse_reactions(self):
+        """Yield entries for all reactions in model."""
+        for i, id_array in enumerate(self._model.rxns):
+            reaction_id = text_type(id_array[0][0])
+            yield ReactionEntry({'id': reaction_id})
 
-            yield {'id': compound_id}
+    def _convert_compounds(self, model):
+        id_map = {}
+        new_compounds = []
+        for compound in itervalues(model.compounds):
+            # Work around IDs that end with "[X]". Translate to "_X".
+            m = re.match(r'^(.*)\[(\w+)\]$', compound.id)
+            if m:
+                new_id = '{}_{}'.format(m.group(1), m.group(2))
+                id_map[compound.id] = new_id
+                props = dict(compound.properties)
+                props['id'] = new_id
+                props['compartment'] = m.group(2)
+                new_compounds.append(CompoundEntry(props))
+            else:
+                new_compounds.append(compound)
+
+        model.compounds.clear()
+        model.compounds.update((c.id, c) for c in new_compounds)
+
+        return id_map
 
     def _parse_compound_names(self, model):
-        if not hasattr(model, 'metNames'):
+        """Parse and update names of model compounds."""
+        if not hasattr(self._model, 'metNames'):
             logger.warning('No compound names defined in model')
             return
 
-        for i, compound in enumerate(self._compounds):
-            name = model.metNames[i, 0]
+        for i, compound_id in enumerate(self._compound_list):
+            name = self._model.metNames[i, 0]
             if len(name) > 0:
-                compound['name'] = text_type(name[0])
+                model.compounds[compound_id].properties['name'] = (
+                    text_type(name[0]))
 
     def _parse_compound_formulas(self, model):
-        if not hasattr(model, 'metFormulas'):
+        """Parse and update formula of model compounds."""
+        if not hasattr(self._model, 'metFormulas'):
             logger.warning('No compound formulas defined in model')
             return
 
-        for i, compound in enumerate(self._compounds):
-            formula = model.metFormulas[i, 0]
+        for i, compound_id in enumerate(self._compound_list):
+            formula = self._model.metFormulas[i, 0]
             if len(formula) > 0:
-                compound['formula'] = self._try_parse_formula(
-                    compound['id'], formula[0])
+                model.compounds[compound_id].properties['formula'] = (
+                    self._try_parse_formula(compound_id, formula[0]))
 
     def _parse_compound_charge(self, model):
-        if not hasattr(model, 'metCharge'):
+        """Parse and update charge of model compounds."""
+        if not hasattr(self._model, 'metCharge'):
             logger.warning('No compound charge defined in model')
             return
 
-        for i, compound in enumerate(self._compounds):
-            charge = model.metCharge[i, 0]
-            compound['charge'] = int(charge)
-
-    def _parse_reactions(self, model):
-        for i, id_array in enumerate(model.rxns):
-            reaction_id = text_type(id_array[0][0])
-            yield {'id': reaction_id}
+        for i, compound_id in enumerate(self._compound_list):
+            charge = self._model.metCharge[i, 0]
+            model.compounds[compound_id].properties['charge'] = int(charge)
 
     def _parse_reaction_names(self, model):
-        if not hasattr(model, 'rxnNames'):
+        """Parse and update names of model reactions."""
+        if not hasattr(self._model, 'rxnNames'):
             logger.warning('No reaction names defined in model')
             return
 
-        for i, reaction in enumerate(self._reactions):
-            name = model.rxnNames[i, 0]
+        for i, reaction_id in enumerate(self._reaction_list):
+            name = self._model.rxnNames[i, 0]
             if len(name) > 0:
-                reaction['name'] = text_type(name[0])
+                model.reactions[reaction_id].properties['name'] = (
+                    text_type(name[0]))
 
     def _parse_reaction_equations(self, model):
-        for i, reaction in enumerate(self._reactions):
+        """Parse and update equations of model reactions."""
+        for i, reaction_id in enumerate(self._reaction_list):
             # Parse reaction equation
-            rows, _ = model.S[:, i].nonzero()
+            rows, _ = self._model.S[:, i].nonzero()
 
             def iter_compounds():
                 for row in rows:
-                    compound_id = self._compounds[row]['id']
-                    value = float(model.S[row, i])
+                    compound_id = self._compound_list[row]
+                    compartment = model.compounds[compound_id].properties.get(
+                        'compartment')
+
+                    value = float(self._model.S[row, i])
                     if value % 1 == 0:
                         value = int(value)
-                    yield Compound(compound_id), value
+                    yield Compound(compound_id, compartment), value
 
-            direction = (
-                Direction.Both if bool(model.rev[i][0]) else Direction.Forward)
+            direction = (Direction.Both if bool(self._model.rev[i][0])
+                         else Direction.Forward)
             equation = Reaction(direction, iter_compounds())
 
-            reaction['equation'] = equation
+            model.reactions[reaction_id].properties['equation'] = equation
 
     def _parse_reaction_subsystems(self, model):
-        if not hasattr(model, 'subSystems'):
+        """Parse and update subsystem of model reactions."""
+        if not hasattr(self._model, 'subSystems'):
             logger.warning('No reaction subsystems defined in model')
             return
 
-        for i, reaction in enumerate(self._reactions):
-            subsystem = model.subSystems[i, 0]
+        for i, reaction_id in enumerate(self._reaction_list):
+            subsystem = self._model.subSystems[i, 0]
             if len(subsystem) > 0:
-                reaction['subsystem'] = text_type(subsystem[0])
+                model.reactions[reaction_id].properties['subsystem'] = (
+                    text_type(subsystem[0]))
 
     def _parse_reaction_gene_rules(self, model):
-        if not hasattr(model, 'genes'):
+        """Parse and update genes of model reactions."""
+        if not hasattr(self._model, 'genes'):
             logger.warning('No genes defined in model')
             return
 
-        if not hasattr(model, 'rules'):
+        if not hasattr(self._model, 'rules'):
             logger.warning('No gene association rules in model')
             return
 
-        gene_count = model.genes.shape[0]
+        gene_count = self._model.genes.shape[0]
 
         var_p = re.compile(r'x\((\d+)\)')
 
@@ -223,30 +267,31 @@ class Importer(BaseImporter):
             if not 1 <= gene_id <= gene_count:
                 raise ParseError('Invalid gene index {}'.format(gene_id))
 
-            gene = model.genes[gene_id - 1, 0]
+            gene = self._model.genes[gene_id - 1, 0]
             if len(gene) == 0:
                 raise ParseError('Missing gene information for {}'.format(
                     gene_id))
 
             return gene[0]
 
-        for i, reaction in enumerate(self._reactions):
-            rules = model.rules[i, 0]
+        for i, reaction_id in enumerate(self._reaction_list):
+            rules = self._model.rules[i, 0]
             if len(rules) > 0:
                 assoc = (var_p.sub(gene_repl, rules[0]).
                          replace('&', 'and').
                          replace('|', 'or'))
-                assoc = self._try_parse_gene_association(reaction['id'], assoc)
-                reaction['genes'] = assoc
+                assoc = self._try_parse_gene_association(reaction_id, assoc)
+                model.reactions[reaction_id].properties['genes'] = assoc
 
     def _parse_flux_bounds(self, model):
-        if not hasattr(model, 'lb') or not hasattr(model, 'ub'):
+        """Parse and update flux bounds of model reactions."""
+        if not hasattr(self._model, 'lb') or not hasattr(self._model, 'ub'):
             logger.warning('No flux bounds defined in model')
             return
 
-        for i, reaction in enumerate(self._reactions):
-            reaction['lower_flux'] = int(model.lb[i, 0])
-            reaction['upper_flux'] = int(model.ub[i, 0])
+        for i, reaction_id in enumerate(self._reaction_list):
+            lower, upper = int(self._model.lb[i, 0]), int(self._model.ub[i, 0])
+            model.limits[reaction_id] = lower, upper
 
     def import_model(self, source):
         if not hasattr(source, 'read'):  # Not a File-like object

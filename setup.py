@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU General Public License
 # along with PSAMM.  If not, see <http://www.gnu.org/licenses/>.
 #
-# Copyright 2015-2016  Jon Lund Steffensen <jon_steffensen@uri.edu>
+# Copyright 2015-2017  Jon Lund Steffensen <jon_steffensen@uri.edu>
 
 from setuptools import setup, find_packages
 
@@ -39,8 +39,8 @@ setup(
     },
 
     install_requires=[
-        'psamm>=0.19',
-        'psamm-import>=0.10',
+        'psamm>=0.28',
+        'psamm-import>=0.15',
         'numpy',
         'scipy',
         'six'
